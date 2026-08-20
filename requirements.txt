@@ -1,0 +1,15 @@
+faiss-cpu
+sentence-transformers
+datasets
+groq
+websockets
+python-dotenv
+numpy
+pandas
+nltk
+requests
+scikit-learn
+colorama
+fastapi
+uvicorn[standard]
+httpx
