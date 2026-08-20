@@ -40,7 +40,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Allow React dev server & production origin
+# Allow React dev server, production origin, and any custom origin set via env
+_extra_origin = os.getenv("ALLOWED_ORIGIN", "")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -48,12 +49,14 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        *( [_extra_origin] if _extra_origin else [] ),
         "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────

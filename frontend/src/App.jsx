@@ -5,7 +5,10 @@ import MetricsPanel from './components/MetricsPanel'
 import Header from './components/Header'
 import History from './components/History'
 
-const API_BASE = ''
+// In production (Vercel), set VITE_API_BASE_URL to your Railway backend URL.
+// Locally, the Vite proxy handles /api → localhost:8000 so this stays empty.
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+
 
 export default function App() {
   const [query, setQuery] = useState('')
