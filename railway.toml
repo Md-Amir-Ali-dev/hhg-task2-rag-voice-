@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'); print('sentence-transformers model cached OK')\""
+buildCommand = "python -c \"from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge-small-en-v1.5').embed(['warmup'])); print('fastembed model cached OK')\""
 
 [deploy]
 startCommand = "python -m uvicorn server:app --host 0.0.0.0 --port $PORT"

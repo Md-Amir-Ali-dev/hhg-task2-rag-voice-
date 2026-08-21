@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+*.log
+.DS_Store
+.git/
+.gitignore
+.vscode/
+
+# Ignore frontend build files and dependencies if not needed in backend container
+# Or ignore node_modules if we are building inside docker (we will just copy frontend/dist if anything)
+frontend/node_modules/

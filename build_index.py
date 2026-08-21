@@ -22,7 +22,7 @@ import pandas as pd
 import nltk
 from nltk.tokenize import sent_tokenize
 from datasets import load_dataset
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 # ── NLTK punkt tokenizer ──────────────────────────────────────────────────────
 for resource in ("tokenizers/punkt", "tokenizers/punkt_tab"):
@@ -32,7 +32,7 @@ for resource in ("tokenizers/punkt", "tokenizers/punkt_tab"):
         nltk.download(resource.split("/")[-1])
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+MODEL_NAME = "BAAI/bge-small-en-v1.5"   # ONNX-based, 384-dim, ~33 MB — matches fastembed in retriever.py
 INDEX_FILE = "msmarco_faiss.index"
 DATA_FILE  = "msmarco_chunks.csv"
 
@@ -297,16 +297,13 @@ def build_index():
 
     # ── Embed ────────────────────────────────────────────────────────────────
     print(f"\nLoading embedding model: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
+    model = TextEmbedding(model_name=MODEL_NAME)
 
     print("Generating embeddings (this may take a few minutes)…")
     t0 = time.time()
-    embeddings = model.encode(
-        chunk_df["text"].tolist(),
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        batch_size=128,
-    )
+    texts = chunk_df["text"].tolist()
+    # fastembed.embed() returns a generator — materialise to numpy
+    embeddings = np.array(list(model.embed(texts)), dtype=np.float32)
     print(f"Embeddings generated in {time.time() - t0:.1f}s — shape: {embeddings.shape}")
 
     # ── Build FAISS ──────────────────────────────────────────────────────────

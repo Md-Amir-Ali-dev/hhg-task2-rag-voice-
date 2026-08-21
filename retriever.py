@@ -12,8 +12,8 @@ import re
 import time
 import faiss
 import numpy as np
-import pandas as pd
-from sentence_transformers import SentenceTransformer
+import csv
+from fastembed import TextEmbedding
 from dataclasses import dataclass, field
 
 # ── Unsafe-input blocklist ────────────────────────────────────────────────────
@@ -44,21 +44,24 @@ class FastRetriever:
         self,
         index_path:  str = "msmarco_faiss.index",
         data_path:   str = "msmarco_chunks.csv",
-        model_name:  str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        model_name:  str = "BAAI/bge-small-en-v1.5",
     ):
         self.index_path = index_path
         self.data_path  = data_path
 
         print("Loading embedding model for retrieval…")
-        self.model = SentenceTransformer(model_name)
+        # fastembed uses ONNX Runtime — ~120 MB RAM vs ~700 MB for PyTorch/sentence-transformers
+        self.model = TextEmbedding(model_name=model_name)
 
         try:
             print("Loading FAISS index…")
             self.index = faiss.read_index(index_path)
             print("Loading chunk metadata…")
-            self.df = pd.read_csv(data_path)
+            with open(data_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                self.chunks = list(reader)
             self.ready = True
-            print(f"Retriever ready — {self.index.ntotal} vectors, {len(self.df)} chunks")
+            print(f"Retriever ready — {self.index.ntotal} vectors, {len(self.chunks)} chunks")
         except Exception as exc:
             print(f"⚠ Could not load index ({exc}). Run build_index.py first!")
             self.ready = False
@@ -98,7 +101,8 @@ class FastRetriever:
             )
 
         # ── 2. Embed ──────────────────────────────────────────────────────────
-        query_emb = self.model.encode([query], convert_to_numpy=True)
+        # fastembed.encode() returns a generator — convert to numpy array
+        query_emb = np.array(list(self.model.embed([query])), dtype=np.float32)
         faiss.normalize_L2(query_emb)
 
         # ── 3. FAISS search (fetch 3× candidates for re-ranking headroom) ─────
@@ -110,9 +114,9 @@ class FastRetriever:
         # ── 4. Metadata-aware re-ranking ─────────────────────────────────────
         boosted = []
         for score, idx in zip(raw_scores, raw_indices):
-            if idx == -1 or idx >= len(self.df):
+            if idx == -1 or idx >= len(self.chunks):
                 continue
-            meta  = self.df.iloc[idx]
+            meta  = self.chunks[idx]
             boost = _SELECTED_BOOST if int(meta.get("is_selected", 0)) == 1 else 0.0
             boosted.append((score + boost, idx, meta))
 
