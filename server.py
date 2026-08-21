@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import asyncio
+import threading
 import time
 import os
 import json
@@ -15,29 +17,48 @@ from stt import SarvamSTTClient
 import app as app_pipeline
 
 
-# ── Lifespan (modern FastAPI startup) ─────────────────────────────────────────
+# ── Global state — populated by background loader ─────────────────────────────
 retriever: FastRetriever | None = None
 llm_real: FastLLM | None = None
 llm_mock: FastLLM | None = None
 stt_client: SarvamSTTClient | None = None
 
+_loading_done = False
+_loading_error: str | None = None
+
+
+def _load_components():
+    """Runs in a daemon thread — loads heavy models without blocking uvicorn startup."""
+    global retriever, llm_real, llm_mock, stt_client, _loading_done, _loading_error
+    try:
+        print("[startup] Loading Voice RAG pipeline components in background…")
+        retriever   = FastRetriever()
+        llm_real    = FastLLM(use_mock=False)
+        llm_mock    = FastLLM(use_mock=True)
+        stt_client  = SarvamSTTClient()
+        _loading_done = True
+        print("[startup] Voice RAG Pipeline ready!")
+    except Exception as exc:
+        _loading_error = str(exc)
+        _loading_done  = True   # mark done even on error so health knows what happened
+        print(f"[startup] ERROR loading pipeline: {exc}")
+
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
-    global retriever, llm_real, llm_mock, stt_client
-    print("Loading Voice RAG pipeline components...")
-    retriever = FastRetriever()
-    llm_real = FastLLM(use_mock=False)
-    llm_mock = FastLLM(use_mock=True)
-    stt_client = SarvamSTTClient()
-    print("Voice RAG Pipeline ready!")
+    # Kick off background loading immediately — do NOT await it here.
+    # uvicorn will bind to $PORT and start accepting requests (including health checks)
+    # within milliseconds while the models load in parallel.
+    t = threading.Thread(target=_load_components, daemon=True)
+    t.start()
     yield
+    # Nothing to clean up; daemon thread exits with the process.
 
 
 app = FastAPI(
     title="Voice RAG API — Powered by Sarvam AI & Groq",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Allow React dev server, production origin, and any custom origin set via env
@@ -56,7 +77,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -78,10 +98,25 @@ class QueryResponse(BaseModel):
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
+def _assert_ready():
+    """Raise 503 if the pipeline is still loading."""
+    if not _loading_done:
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeline is still loading — please retry in a few seconds."
+        )
+    if _loading_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Pipeline failed to load: {_loading_error}"
+        )
+    if retriever is None:
+        raise HTTPException(status_code=503, detail="Retriever not ready yet.")
+
+
 async def _run_query(query_text: str, use_mock: bool, initial_stt_ms: float = 0.0) -> QueryResponse:
     """Shared pipeline execution for text and voice queries."""
-    if retriever is None:
-        raise HTTPException(status_code=503, detail="Retriever not ready yet")
+    _assert_ready()
 
     total_start = time.time()
 
@@ -125,8 +160,21 @@ async def _run_query(query_text: str, use_mock: bool, initial_stt_ms: float = 0.
 
 @app.get("/api/health")
 async def health():
+    """
+    Always returns HTTP 200 so Railway's health check passes immediately.
+    The 'status' field tells clients whether the pipeline is still warming up.
+    """
+    if not _loading_done:
+        status = "loading"
+    elif _loading_error:
+        status = "error"
+    else:
+        status = "ok"
+
     return {
-        "status": "ok",
+        "status": status,
+        "loading_complete": _loading_done,
+        "loading_error": _loading_error,
         "retriever_ready": retriever is not None and retriever.ready,
         "stt_provider": "Sarvam AI (saaras:v3)",
         "llm_provider": "Groq (llama-3.1-8b-instant)",
@@ -150,6 +198,8 @@ async def run_voice_query(
     Voice query endpoint.
     Transcribes audio via Sarvam AI STT, then executes full RAG pipeline.
     """
+    _assert_ready()
+
     stt_start = time.time()
     audio_bytes = await file.read()
 
